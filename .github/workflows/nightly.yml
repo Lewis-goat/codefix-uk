@@ -1,0 +1,45 @@
+name: nightly-blog
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  issues: write
+concurrency:
+  group: nightly-blog
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish next blog post
+        id: pub
+        run: python3 scripts/blog_publish.py
+      - name: Commit and push
+        run: |
+          git config user.name "blog-bot"
+          git config user.email "blog-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "nightly blog post: ${{ steps.pub.outputs.title }}" || echo "nothing to commit"
+          git push
+      - name: Ping IndexNow
+        if: steps.pub.outputs.url != ''
+        continue-on-error: true
+        run: |
+          python3 - <<'PY'
+          import json, urllib.request, glob
+          keyfile = glob.glob("*.txt")
+          key = open([f for f in keyfile if len(f.stem) == 32][0]).read().strip()
+          host = https://uk.codefixcoffee.com.strip("https://").strip("/")
+          urls = ["${{ steps.pub.outputs.url }}", f"https://{host}/blog/"]
+          body = json.dumps({"host": host, "key": key, "keyLocation": f"https://{host}/{key}.txt", "urlList": urls}).encode()
+          req = urllib.request.Request("https://api.indexnow.org/IndexNow?url=&json=true", data=body, headers={"Content-Type": "application/json; charset=utf-8"})
+          try: print("indexnow", urllib.request.urlopen(req, timeout=20).status)
+          except Exception as e: print("indexnow skipped:", e)
+          PY
+      - name: Remind to refill bank
+        if: steps.pub.outputs.empty == 'true'
+        run: gh issue create --title "Blog bank is empty" --body "Add new .md files to bank/." || true
+        env:
+          GH_TOKEN: ${{ github.token }}
